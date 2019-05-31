@@ -16,7 +16,28 @@ void your_rgba_to_greyscale(const uchar4 * const h_rgbaImage,
 //include the definitions of the above functions for this homework
 #include "HW1.cpp"
 
+
+void TestSpeed () {
+  //the size is larger than 557*313
+  //but it spend less time
+  static int x[313][557];
+  static int y[313][557];
+  srand(time(0));
+  for (int i = 0; i < 313; ++ i)
+    for (int j = 0; j < 557; ++ j) {
+      x[i][j] = rand();
+    }
+  float t = clock();
+  for (int i = 0; i < 313; ++ i)
+    for (int j = 0; j < 557; ++ j) {
+      y[i][j] = x[i][j] * 0.3 + x[i][j]*0.2 + x[i][j] * 0.5;
+    }
+  printf("the normal array  test speed -> the time is : %lf ms\n", (clock()-t)/ CLOCKS_PER_SEC * 1000);
+
+}
+
 int main(int argc, char **argv) {
+  TestSpeed();
   uchar4        *h_rgbaImage, *d_rgbaImage;
   unsigned char *h_greyImage, *d_greyImage;
 
@@ -28,30 +49,30 @@ int main(int argc, char **argv) {
   bool useEpsCheck = false;
   switch (argc)
   {
-	case 2:
-	  input_file = std::string(argv[1]);
-	  output_file = "HW1_output.png";
-	  reference_file = "HW1_reference.png";
-	  break;
-	case 3:
-	  input_file  = std::string(argv[1]);
+    case 2:
+      input_file = std::string(argv[1]);
+      output_file = "HW1_output.png";
+      reference_file = "HW1_reference.png";
+      break;
+    case 3:
+      input_file  = std::string(argv[1]);
       output_file = std::string(argv[2]);
-	  reference_file = "HW1_reference.png";
-	  break;
-	case 4:
-	  input_file  = std::string(argv[1]);
+      reference_file = "HW1_reference.png";
+      break;
+    case 4:
+      input_file  = std::string(argv[1]);
       output_file = std::string(argv[2]);
-	  reference_file = std::string(argv[3]);
-	  break;
-	case 6:
-	  useEpsCheck=true;
-	  input_file  = std::string(argv[1]);
-	  output_file = std::string(argv[2]);
-	  reference_file = std::string(argv[3]);
-	  perPixelError = atof(argv[4]);
+      reference_file = std::string(argv[3]);
+      break;
+    case 6:
+      useEpsCheck=true;
+      input_file  = std::string(argv[1]);
+      output_file = std::string(argv[2]);
+      reference_file = std::string(argv[3]);
+      perPixelError = atof(argv[4]);
       globalError   = atof(argv[5]);
-	  break;
-	default:
+      break;
+    default:
       std::cerr << "Usage: ./HW1 input_file [output_filename] [reference_filename] [perPixelError] [globalError]" << std::endl;
       exit(1);
   }
@@ -69,7 +90,7 @@ int main(int argc, char **argv) {
   timer.Stop();
   cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-  int err = printf("Your code ran in: %f msecs.\n", timer.Elapsed());
+  int err = printf("Your gpu code ran in: %f msecs.\n", timer.Elapsed());
 
   if (err < 0) {
     //Couldn't print! Probably the student closed stdout - bad news
@@ -79,17 +100,23 @@ int main(int argc, char **argv) {
 
   size_t numPixels = numRows()*numCols();
   //把gpu算出的灰度图像转移到cpu内存的灰度图像上
-  checkCudaErrors(cudaMemcpy(h_greyImage, d_greyImage, sizeof(unsigned char) * numPixels, cudaMemcpyDeviceToHost));
 
+  timer.Start();
+  checkCudaErrors(cudaMemcpy(h_greyImage, d_greyImage, sizeof(unsigned char) * numPixels, cudaMemcpyDeviceToHost));
+  timer.Stop();
+  printf("the time of copy memory from gpu to cpu: %f msecs.\n", timer.Elapsed());
   //check results and output the grey image
   postProcess(output_file, h_greyImage);
 
+  timer.Start();
   referenceCalculation(h_rgbaImage, h_greyImage, numRows(), numCols());
+  timer.Stop();
+  printf("the cpu code ran in: %f msecs.\n", timer.Elapsed());
 
   postProcess(reference_file, h_greyImage);
 
   //generateReferenceImage(input_file, reference_file);
-  compareImages(reference_file, output_file, useEpsCheck, perPixelError, 
+  compareImages(reference_file, output_file, useEpsCheck, perPixelError,
                 globalError);
 
   cleanup();

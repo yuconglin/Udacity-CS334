@@ -50,12 +50,17 @@ void preProcess(uchar4 **inputImage, unsigned char **greyImage,
 
   const size_t numPixels = numRows() * numCols();
   //allocate memory on the device for both input and output
-  checkCudaErrors(cudaMalloc(d_rgbaImage, sizeof(uchar4) * numPixels));     //分配内存
-  checkCudaErrors(cudaMalloc(d_greyImage, sizeof(unsigned char) * numPixels));  //分配内存
+  //GpuTimer timer;
+  //timer.Start();
+  float timer = clock();
+  checkCudaErrors(cudaMalloc(d_rgbaImage, sizeof(uchar4) * numPixels));     //分配gpu内存
+  checkCudaErrors(cudaMalloc(d_greyImage, sizeof(unsigned char) * numPixels));  //分配gpu内存
   checkCudaErrors(cudaMemset(*d_greyImage, 0, numPixels * sizeof(unsigned char))); //make sure no memory is left laying around  内存清0
 
   //copy input array to the GPU
   checkCudaErrors(cudaMemcpy(*d_rgbaImage, *inputImage, sizeof(uchar4) * numPixels, cudaMemcpyHostToDevice));//cpu的rgba的内存赋值到gpu上
+
+  printf("The time of allocate the memroy and copy memory from host to device is: %f msecs.\n", (clock()-timer)/CLOCKS_PER_SEC/1000);
 
   d_rgbaImage__ = *d_rgbaImage;
   d_greyImage__ = *d_greyImage;
