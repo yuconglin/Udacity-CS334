@@ -22,7 +22,7 @@ if(CUDA_FOUND)
   # about this compiler argument
   set(CUDA_NVCC_FLAGS "
   -ccbin /usr/bin/g++-6;
-  -gencode;arch=compute_61,code=sm_61;")
+  -gencode;arch=compute_70,code=sm_70;")
 #        -gencode;arch=compute_20,code=sm_20;
 #  -gencode;arch=compute_11,code=sm_11;
 #  -gencode;arch=compute_12,code=sm_12;
