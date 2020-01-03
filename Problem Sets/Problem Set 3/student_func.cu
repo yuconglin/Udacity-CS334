@@ -375,19 +375,14 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     float *d_buf;
     int N = numRows * numCols;
     if (N & 1) N += 1;
-    float prev_max_logLum = max_logLum;
     checkCudaErrors(cudaMalloc(&d_buf, sizeof(float) * N));
-
     cudaMemcpy(d_buf, d_logLuminance, numRows * numCols, cudaMemcpyDeviceToDevice);
+    /*
+    // another way
     reduce_find_max<<<(N + 1023) / 1024, 1024>>>(N, d_buf);
     cudaMemcpy(&max_logLum, d_buf, sizeof(float), cudaMemcpyDeviceToHost);
-    /*
-    float *d_max;
-    checkCudaErrors(cudaMalloc(&d_max, sizeof(float) * N));
-    reduce_find_max2<<<(N + 1023) , 1024, 1024*sizeof(float)>>>(N, d_buf, d_max);
-    cudaMemcpy(&max_logLum, d_max, sizeof(float), cudaMemcpyDeviceToHost);
-    checkCudaErrors(cudaFree(d_max));
     */
+    max_logLum = reduce_max(d_buf, N, (N+1023)/1024);
 
     cudaMemcpy(d_buf, d_logLuminance, numRows * numCols, cudaMemcpyDeviceToDevice);
     reduce_find_min<<<(N + 1023) / 1024, 1024>>>(N, d_buf);
