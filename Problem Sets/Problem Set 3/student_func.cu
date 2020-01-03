@@ -217,6 +217,111 @@ float reduce_minmax(const float* const d_in, const size_t size, int minmax) {
     return h_out;
 }
 
+__global__ void reduce_find_min(const size_t N, float* buf) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    __syncthreads();
+    for (int s1 = (N + 1) / 2; s1 > 1; s1 = (s1 + 1) >> 1) {
+      if (tid < s1) {
+        buf[tid] = min(buf[tid], buf[tid + s1]);
+      }
+    }
+    if (tid == 0)
+      buf[0] = min(buf[0], buf[1]);
+}
+
+__global__ void reduce_find_max(const size_t N, float* buf) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    __syncthreads();
+    for (int s1 = (N + 1) / 2; s1 > 1; s1 = (s1 + 1) >> 1) {
+      if (tid < s1) {
+        buf[tid] = max(buf[tid], buf[tid + s1]);
+      }
+    }
+    if (tid == 0) 
+      buf[0] = max(buf[0], buf[1]);
+}
+
+
+__global__ void reduce_find_max2(const size_t N, const float* const buf, float* d_max) {
+    extern __shared__ float shared[];
+
+    int tid = threadIdx.x;
+    int gid = blockIdx.x * blockDim.x + tid;
+    shared[tid] = -FLT_MAX;
+
+    if (gid < N)
+      shared[tid] = buf[gid];
+    __syncthreads();
+
+    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
+      if (tid < s && gid < N)
+        shared[tid] = max(shared[tid], shared[tid + s]);
+      __syncthreads();
+    }
+
+    if (tid == 0) 
+      d_max[blockIdx.x] = shared[tid];
+}
+
+float reduce_max(const float* const d_in, const size_t size, int block_size) {
+    // we need to keep reducing until we get to the amount that we consider 
+    // having the entire thing fit into one block size
+    size_t curr_size = size;
+    float* d_curr_in;
+    
+    checkCudaErrors(cudaMalloc(&d_curr_in, sizeof(float) * size));    
+    checkCudaErrors(cudaMemcpy(d_curr_in, d_in, sizeof(float) * size, cudaMemcpyDeviceToDevice));
+
+
+    float* d_curr_out;
+    
+    dim3 thread_dim(block_size);
+    const int shared_mem_size = sizeof(float)*block_size;
+    
+    while(1) {
+        checkCudaErrors(cudaMalloc(&d_curr_out, sizeof(float) * get_max_size(curr_size, block_size)));
+        
+        dim3 block_dim(get_max_size(size, block_size));
+        reduce_find_max2<<<block_dim, thread_dim, shared_mem_size>>>(
+	    curr_size,
+            d_curr_in,
+            d_curr_out
+        );
+        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+            
+        // move the current input to the output, and clear the last input if necessary
+        checkCudaErrors(cudaFree(d_curr_in));
+        d_curr_in = d_curr_out;
+        
+        if(curr_size < block_size) 
+            break;
+        
+        curr_size = get_max_size(curr_size, block_size);
+    }
+    
+    // theoretically we should be 
+    float h_out;
+    cudaMemcpy(&h_out, d_curr_out, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaFree(d_curr_out);
+    return h_out;
+}
+
+__global__ void getBinOfInput(const float* const input, float lumMin, float lumRange, size_t numBins, size_t dataCount, unsigned int* col_o) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int bin_num = 0;
+    if (tid < dataCount) {
+      bin_num = min((size_t)(((input[tid] - lumMin) / lumRange) * numBins), numBins - 1);
+      atomicAdd(&col_o[bin_num], 1);
+    }
+}
+
+__global__ void getCdf(unsigned int *d_bin, const int numBins, unsigned int* const d_cdf) {
+    for (int i = 1; i < numBins; ++i) {
+      d_cdf[i] = d_bin[i-1] + d_cdf[i-1];
+    }
+}
+
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
                                   float &min_logLum,
@@ -245,24 +350,16 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 
     unsigned int h_out[100];
     cudaMemcpy(&h_out, d_bins, sizeof(unsigned int)*100, cudaMemcpyDeviceToHost);
-    for(int i = 0; i < 100; i++)
-        printf("hist out %d\n", h_out[i]);
-    
     dim3 scan_block_dim(get_max_size(numBins, thread_dim.x));
 
     scan_kernel<<<scan_block_dim, thread_dim>>>(d_bins, numBins);
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
     
     cudaMemcpy(&h_out, d_bins, sizeof(unsigned int)*100, cudaMemcpyDeviceToHost);
-    for(int i = 0; i < 100; i++)
-        printf("cdf out %d\n", h_out[i]);
-    
 
     cudaMemcpy(d_cdf, d_bins, histo_size, cudaMemcpyDeviceToDevice);
-
     
     checkCudaErrors(cudaFree(d_bins));
-     
     
   //TODO
   /*Here are the steps you need to implement
@@ -274,4 +371,41 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     4) Perform an exclusive scan (prefix sum) on the histogram to get
        the cumulative distribution of luminance values (this should go in the
        incoming d_cdf pointer which already has been allocated for you)       */
+    //1)
+    float *d_buf;
+    int N = numRows * numCols;
+    if (N & 1) N += 1;
+    float prev_max_logLum = max_logLum;
+    checkCudaErrors(cudaMalloc(&d_buf, sizeof(float) * N));
+
+    cudaMemcpy(d_buf, d_logLuminance, numRows * numCols, cudaMemcpyDeviceToDevice);
+    reduce_find_max<<<(N + 1023) / 1024, 1024>>>(N, d_buf);
+    cudaMemcpy(&max_logLum, d_buf, sizeof(float), cudaMemcpyDeviceToHost);
+    /*
+    float *d_max;
+    checkCudaErrors(cudaMalloc(&d_max, sizeof(float) * N));
+    reduce_find_max2<<<(N + 1023) , 1024, 1024*sizeof(float)>>>(N, d_buf, d_max);
+    cudaMemcpy(&max_logLum, d_max, sizeof(float), cudaMemcpyDeviceToHost);
+    checkCudaErrors(cudaFree(d_max));
+    */
+
+    cudaMemcpy(d_buf, d_logLuminance, numRows * numCols, cudaMemcpyDeviceToDevice);
+    reduce_find_min<<<(N + 1023) / 1024, 1024>>>(N, d_buf);
+    cudaMemcpy(&min_logLum, d_buf, sizeof(float), cudaMemcpyDeviceToHost);
+
+    checkCudaErrors(cudaFree(d_buf));
+    
+    printf("got min of %f\n", min_logLum);
+    printf("got max of %f\n", max_logLum);
+    //2
+    float lumRange = max_logLum - min_logLum;
+    N = numRows * numCols;
+    //3
+    unsigned int *d_bin;
+    checkCudaErrors(cudaMalloc(&d_bin, sizeof(unsigned int) * numBins));
+    cudaMemset(d_bin, 0, sizeof(unsigned int) * numBins);
+    getBinOfInput<<<(N + 1023) / 1024, 1024>>>(d_logLuminance, min_logLum, lumRange, numBins, N, d_bin);
+    //4
+    cudaMemset(d_cdf, 0, sizeof(numBins));
+    getCdf<<<1, 1>>>(d_bin, numBins, d_cdf);
 }
